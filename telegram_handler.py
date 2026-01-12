@@ -309,6 +309,15 @@ class SignalExecutor:
 
                 latest_kline_with_indicators = df_with_indicators.iloc[-1]
 
+                self.logger.info(
+                    f"Indicators for {symbol} | Price: {current_market_price:.4f} | "
+                    f"EMA_50: {latest_kline_with_indicators[f'EMA_{self.config.indicators.ema_50}']:.4f} | "
+                    f"EMA_200: {latest_kline_with_indicators[f'EMA_{self.config.indicators.ema_200}']:.4f} | "
+                    f"RSI: {latest_kline_with_indicators['RSI']:.2f} | "
+                    f"MACD Line: {latest_kline_with_indicators['MACD_Line']:.4f} | "
+                    f"MACD Signal: {latest_kline_with_indicators['MACD_Signal']:.4f}"
+                )
+
                 # Evaluate signal conditions based on indicators
                 signal_valid, confirmation_count = self._evaluate_signal_conditions(symbol, latest_kline_with_indicators, current_market_price, side)
 
