@@ -1,0 +1,53 @@
+{
+  "bybit": {
+    "api_key": "64Pfll8AWxzdAESHVg",
+    "api_secret": "gz6788i3ZX55mCBXzhf11ZwxaESpbSdwR3J6",
+    "testnet": true
+  },
+  "telegram": {
+    "api_id": 20068122,
+    "api_hash": "28a2c1b0cd1c6d3770b7df0048ee7a36",
+    "channel_identifier": "Back to it",
+    "session_name": "bybit_bot"
+  },
+  "trading": {
+    "leverage": 12.5,
+    "timeframe": "15m",
+    "kline_refresh_interval_seconds": 60
+  },
+  "indicators": {
+    "ema_50": 50,
+    "ema_200": 200,
+    "rsi_length": 14,
+    "macd_fast": 12,
+    "macd_slow": 26,
+    "macd_signal": 9,
+    "atr_length": 14,
+    "bollinger_bands_length": 20,
+    "bollinger_bands_std": 2.0
+  },
+  "signals": {
+    "rsi_long_threshold": 40.0,
+    "rsi_short_threshold": 60.0,
+    "bollinger_band_confirmation": true
+  },
+  "risk_management": {
+    "risk_per_trade_percentage": 2.5,
+    "atr_trailing_stop_multiplier": 1.0,
+    "max_total_exposure_percentage": 6.0,
+    "per_pair_cooldown_minutes": 10,
+    "daily_drawdown_stop_percentage": 6.0,
+    "entry_price_tolerance_percentage": 0.6,
+    "signal_expiration_days": 3
+  },
+  "logging": {
+    "log_level": "INFO",
+    "log_file": "bybit_bot.log"
+  },
+  "websocket": {
+    "heartbeat_seconds": 30,
+    "reconnect_backoff_seconds": 5,
+    "max_reconnect_attempts": 5,
+    "websocket_watchdog_seconds": 60
+  }
+}

@@ -1,0 +1,32 @@
+{
+    "trade_ROSEUSDT_SHORT_2026-01-12T13:10:46.023904": {
+        "type": "trade_signal",
+        "symbol": "ROSEUSDT",
+        "direction": "SHORT",
+        "entry_price": 0.01178,
+        "stop_loss": 0.086564,
+        "take_profits": [
+            0.073398
+        ],
+        "raw_message": "\ud83e\udef2\ud83c\udffc ROSE/USDT\n\n(Short)\nCross (50X)\n\nEntry Targets:\n0.01178\n\n\ud83c\udfaf TP:\n1) 0.078700\n2) 0.077439\n3) 0.076179\n4) 0.075918\n5) 0.074658\n6) 0.073398\n7) To the moon \ud83c\udf16\n\n\u26d4\ufe0f SL:\n0.086564",
+        "parsed_at": "2026-01-12T13:10:46.023904",
+        "parsed_at_datetime": "2026-01-12T13:10:46.023904",
+        "is_to_the_moon": true,
+        "executed": false
+    },
+    "trade_ASTERUSDT_LONG_2026-01-12T14:10:28.832180": {
+        "type": "trade_signal",
+        "symbol": "ASTERUSDT",
+        "direction": "LONG",
+        "entry_price": 0.7396,
+        "stop_loss": 0.66564,
+        "take_profits": [
+            0.78398
+        ],
+        "raw_message": "\ud83e\udef2\ud83c\udffc ASTER/USDT\n\n(Long)\nCross (50X)\n\nEntry Targets:\n0.7396\n\n\ud83c\udfaf TP:\n1) 0.74700\n2) 0.75439\n3) 0.76179\n4) 0.76918\n5) 0.77658\n6) 0.78398\n7) To the moon \ud83c\udf16\n\n\u26d4\ufe0f SL:\n0.66564",
+        "parsed_at": "2026-01-12T14:10:28.832180",
+        "parsed_at_datetime": "2026-01-12T14:10:28.832180",
+        "is_to_the_moon": true,
+        "executed": false
+    }
+}
