@@ -232,8 +232,8 @@ class SignalExecutor:
                 await self._cleanup_signal(signal_id)
                 return
 
-            # Subscribe to WebSocket ticker for the symbol
-            await self.bybit_handler.client.subscribe_to_ticker(symbol)
+            # Subscribe to WebSocket kline for the symbol
+            await self.bybit_handler.client.subscribe_to_kline(symbol, self.config.trading.timeframe)
             self.logger.info(f"Subscribed to WebSocket for {symbol} to monitor entry price.")
             await asyncio.sleep(2) # Add a small delay to allow initial WebSocket data to arrive
 
@@ -525,7 +525,7 @@ class SignalExecutor:
                     self.logger.info(f"Cleaned up signal for {symbol}. Active signals for {symbol}: {self.active_signals_per_symbol[symbol]}")
                     if self.active_signals_per_symbol[symbol] <= 0:
                         self.logger.info(f"No more active signals for {symbol}. Unsubscribing from WebSocket.")
-                        await self.bybit_handler.client.unsubscribe_from_ticker(symbol)
+                        await self.bybit_handler.client.unsubscribe_from_kline(symbol, self.config.trading.timeframe)
                         del self.active_signals_per_symbol[symbol] # Remove symbol if no longer needed
 
             if signal_id in self.monitoring_tasks:
@@ -577,7 +577,7 @@ class SignalExecutor:
         parsed_at_datetime = signal['parsed_at_datetime']
 
         # Ensure WebSocket is subscribed for this symbol
-        await self.bybit_handler.client.subscribe_to_ticker(symbol)
+        await self.bybit_handler.client.subscribe_to_kline(symbol, self.config.trading.timeframe)
         await asyncio.sleep(2) # Small delay for WS to connect and send data
 
         monitoring_task = asyncio.create_task(

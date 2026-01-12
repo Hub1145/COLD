@@ -127,10 +127,16 @@ class BybitFuturesClient:
             self.ws_connected = True
             self.logger.info("Bybit WebSocket initialized. Connection will be established on first subscription.")
 
-    async def unsubscribe_from_ticker(self, symbol: str):
-        """Unsubscribes from ticker data for a single symbol."""
+    async def unsubscribe_from_kline(self, symbol: str, interval: str):
+        """Unsubscribes from kline data for a single symbol."""
         if self.ws_connected and self.ws:
-            topic = f"tickers.{symbol}"
+            interval_map = {
+                '1m': '1', '3m': '3', '5m': '5', '15m': '15', '30m': '30',
+                '1h': '60', '2h': '120', '4h': '240', '6h': '360', '12h': '720',
+                '1d': 'D', '1w': 'W', '1M': 'M'
+            }
+            bybit_interval = interval_map.get(interval, interval)
+            topic = f"kline.{bybit_interval}.{symbol}"
             if topic in self.ws.subscriptions:
                 unsubscribe_message = {
                     "op": "unsubscribe",
