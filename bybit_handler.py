@@ -26,6 +26,8 @@ class BybitFuturesClient:
         self.ws_connected = False
         self.instrument_info_cache = {}
         self.realtime_prices: Dict[str, float] = {}
+        self.kline_cache: Dict[str, pd.DataFrame] = {}
+        self.cache_timestamps: Dict[str, datetime] = {}
         self.current_forming_klines: Dict[str, pd.DataFrame] = {}
         self.logger = logging.getLogger(__name__)
         self.indicators_calculator = TechnicalIndicators(self.logger)
@@ -49,56 +51,41 @@ class BybitFuturesClient:
             channel_type="linear"
         )
 
-    def _process_ticker_data(self, symbol: str, current_price_str: str, volume_str: Optional[str], turnover_str: Optional[str]):
-        """Helper to process ticker data and update real-time prices and forming klines."""
-        if symbol and current_price_str:
-            current_price = float(current_price_str)
-            self.realtime_prices[symbol] = current_price
-            self.logger.debug(f"WS: Updated {symbol} price to {current_price}")
-
-            # Update or create forming kline
-            if symbol not in self.current_forming_klines:
-                self.current_forming_klines[symbol] = pd.DataFrame(
-                    [[datetime.now(timezone.utc), current_price, current_price, current_price, current_price, float(volume_str or 0), float(turnover_str or 0)]],
-                    columns=["Datetime", "Open", "High", "Low", "Close", "Volume", "Turnover"]
-                ).set_index("Datetime")
-            else:
-                forming_kline = self.current_forming_klines[symbol]
-                last_idx = forming_kline.index[-1]
-                forming_kline.loc[last_idx, 'Close'] = current_price
-                forming_kline.loc[last_idx, 'High'] = max(forming_kline.loc[last_idx, 'High'], current_price)
-                forming_kline.loc[last_idx, 'Low'] = min(forming_kline.loc[last_idx, 'Low'], current_price)
-                if volume_str is not None:
-                    forming_kline.loc[last_idx, 'Volume'] = float(volume_str)
-                if turnover_str is not None:
-                    forming_kline.loc[last_idx, 'Turnover'] = float(turnover_str)
-            
-            self.logger.debug(f"WS: Realtime prices after update: {self.realtime_prices}")
-            self.logger.debug(f"WS: Forming kline for {symbol} updated: {self.current_forming_klines[symbol].iloc[-1].to_dict()}")
-
     def _ws_message_handler(self, message):
         """Handles incoming WebSocket messages."""
         self.logger.debug(f"WS: Raw message received: {message}")
         try:
-            if 'topic' in message:
-                if message['topic'].startswith('tickers.'):
-                    data = message.get('data')
-                    if data and isinstance(data, list) and len(data) > 0:
-                        ticker_info = data[0]
-                        self._process_ticker_data(
-                            ticker_info.get('symbol'),
-                            ticker_info.get('lastPrice'),
-                            ticker_info.get('volume'),
-                            ticker_info.get('turnover')
-                        )
-                elif message['topic'].startswith('publicTrade.'):
-                    data = message.get('data')
-                    if data and isinstance(data, list) and len(data) > 0:
-                        trade_info = data[0]
-                        symbol = trade_info.get('s')
-                        last_price = trade_info.get('p')
-                        if symbol and last_price:
-                            self._process_ticker_data(symbol, last_price, None, None)
+            if 'topic' in message and message['topic'].startswith('kline.'):
+                topic = message['topic']
+                symbol = topic.split('.')[-1]
+
+                if symbol in self.kline_cache:
+                    data = message.get('data', [])
+                    for kline in data:
+                        kline_df = pd.DataFrame([{
+                            "Timestamp": int(kline['start']),
+                            "Open": float(kline['open']),
+                            "High": float(kline['high']),
+                            "Low": float(kline['low']),
+                            "Close": float(kline['close']),
+                            "Volume": float(kline['volume']),
+                            "Turnover": float(kline['turnover']),
+                        }])
+                        kline_df['Datetime'] = pd.to_datetime(kline_df['Timestamp'], unit='ms', utc=True)
+                        kline_df = kline_df.set_index('Datetime')
+
+                        cached_df = self.kline_cache[symbol]
+
+                        # Check if the timestamp exists in the cache
+                        if not kline_df.index.isin(cached_df.index).any():
+                            # New candle, append and drop the oldest
+                            self.kline_cache[symbol] = pd.concat([cached_df, kline_df]).iloc[1:]
+                        else:
+                            # Update existing candle
+                            cached_df.update(kline_df)
+
+                        self.cache_timestamps[symbol] = datetime.now(timezone.utc)
+                        self.logger.debug(f"WS: Updated kline cache for {symbol}.")
             elif 'op' in message and message['op'] == 'subscribe':
                 if message.get('success'):
                     self.logger.info(f"WS: Successfully subscribed to {message.get('args')}")
@@ -109,15 +96,23 @@ class BybitFuturesClient:
         except Exception as e:
             self.logger.error(f"Error in WebSocket message handler: {e}", exc_info=True)
 
-    async def subscribe_to_ticker(self, symbol: str):
-        """Subscribes to ticker data for a single symbol."""
-        topic = f"tickers.{symbol}"
+    async def subscribe_to_kline(self, symbol: str, interval: str):
+        """Subscribes to kline data for a single symbol."""
+        # Map interval from '1m', '5m' to '1', '5'
+        interval_map = {
+            '1m': '1', '3m': '3', '5m': '5', '15m': '15', '30m': '30',
+            '1h': '60', '2h': '120', '4h': '240', '6h': '360', '12h': '720',
+            '1d': 'D', '1w': 'W', '1M': 'M'
+        }
+        bybit_interval = interval_map.get(interval, interval)
+        topic = f"kline.{bybit_interval}.{symbol}"
+
         if self.ws is None:
             await self._ensure_ws_connected()
 
         if topic not in self.ws.subscriptions:
             try:
-                self.ws.ticker_stream(symbol=[symbol], callback=self._ws_message_handler)
+                self.ws.kline_stream(interval=bybit_interval, symbol=symbol, callback=self._ws_message_handler)
                 self.logger.info(f"Subscribed to WebSocket topic: {topic} for {symbol}")
             except Exception as e:
                 self.logger.error(f"Error subscribing to WebSocket topic {topic}: {e}", exc_info=True)
@@ -145,7 +140,7 @@ class BybitFuturesClient:
                     self.ws.ws.send(json.dumps(unsubscribe_message))
                 else:
                     self.logger.warning(f"WebSocket connection not active for {symbol}, cannot send unsubscribe message.")
-                
+
                 self.ws.subscriptions.pop(topic, None)
                 self.logger.info(f"Unsubscribed from WebSocket topic: {topic} for {symbol}")
             else:
@@ -216,52 +211,15 @@ class BybitFuturesClient:
         return None
 
     async def get_symbol_price(self, symbol, max_retries=3):
-        """Retrieves the current market price for a futures symbol, prioritizing WebSocket data."""
-        # First, try to get price from WebSocket
-        if self.ws_connected and symbol in self.realtime_prices:
-            self.logger.debug(f"Using WebSocket price for {symbol}: {self.realtime_prices[symbol]}")
-            return self.realtime_prices[symbol]
-
-        # If WS not connected or price not available, fall back to REST API
-        self.logger.warning(f"WebSocket price not available for {symbol}. Falling back to REST API.")
-        for attempt in range(max_retries):
-            try:
-                session = self._create_session()
-                params = {"symbol": symbol, "category": "linear"}
-                response = session.get_tickers(**params)
-
-                self.logger.debug(f"API response from get_symbol_price (REST): {response}")
-
-                if response and response.get("retCode") == 0:
-                    result_list = response.get("result", {}).get("list", [])
-                    if result_list:
-                        price_str = result_list[0].get("lastPrice")
-                        if price_str:
-                            price = float(price_str)
-                            self.logger.info(f"Current price for {symbol} (REST): {price}")
-                            return price
-                        else:
-                            self.logger.error(f"Could not find 'lastPrice' for {symbol} in the REST response.")
-                            return None
-                    else:
-                        self.logger.error(f"Empty results list when getting price for {symbol} via REST.")
-                        return None
-                else:
-                    ret_code = response.get('retCode', 'N/A')
-                    ret_msg = response.get('retMsg', 'Unknown error')
-                    self.logger.error(f"Attempt {attempt + 1}: API error getting price for {symbol} (REST): {ret_msg} (Code: {ret_code})")
-
-            except Exception as e:
-                self.logger.error(f"Attempt {attempt + 1} failed getting price for {symbol} (REST): {e}")
-
-            if attempt < max_retries - 1:
-                wait_time = (2 ** attempt) + random.uniform(0, 1)
-                self.logger.info(f"Retrying get_symbol_price (REST) in {wait_time:.2f} seconds...")
-                time.sleep(wait_time)
-            else:
-                self.logger.error(f"Max retries reached for get_symbol_price({symbol}) via REST. Returning None.")
-                return None
-        return None
+        """Retrieves the current market price for a futures symbol from the kline cache."""
+        if symbol in self.kline_cache:
+            # Get the last close price from the cached kline data
+            last_close = self.kline_cache[symbol]['Close'].iloc[-1]
+            self.logger.debug(f"Using cached kline price for {symbol}: {last_close}")
+            return last_close
+        else:
+            self.logger.warning(f"No kline cache found for {symbol}. Cannot get price.")
+            return None
 
     async def get_instruments_info(self, symbol, max_retries=3):
         """Retrieves instrument information for a futures symbol."""
@@ -384,10 +342,10 @@ class BybitFuturesClient:
             return str(round(quantity, precision))
 
         qty_step = float(instrument_info["lotSizeFilter"].get("qtyStep", "0.001"))
-        
+
         # Snap quantity to the nearest qtyStep
         quantity = round(round(quantity / qty_step) * qty_step, precision)
-        
+
         try:
             format_string = "{:." + str(precision) + "f}"
             formatted_qty_str = format_string.format(quantity)
@@ -423,7 +381,7 @@ class BybitFuturesClient:
                     if current_market_price is None:
                         self.logger.warning(f"Could not get current market price for {symbol}. Cannot determine order type. Proceeding with conditional order.")
                         params["orderType"] = "MARKET"
-                    
+
                     params["triggerPrice"] = str(trigger_price)
                     params["triggerDirection"] = 1 if side == "Buy" else 2
                     params["triggerBy"] = "LastPrice"
@@ -437,9 +395,9 @@ class BybitFuturesClient:
                 elif order_type == "LIMIT":
                     params["price"] = str(trigger_price) if trigger_price else str(await self.get_symbol_price(symbol))
                     self.logger.info(f"Regular Limit Order: Price {params['price']}")
-                
+
                 self.logger.info(f"Attempt {attempt + 1}: Placing order with parameters: {params}")
- 
+
                 response = session.place_order(**params)
                 self.logger.debug(f"API response from place_order: {response}")
 
@@ -670,9 +628,9 @@ class BybitFuturesClient:
             elif order_info and order_info.get("orderStatus") in ["Cancelled", "Rejected"]:
                 self.logger.warning(f"Order {order_id} for {symbol} was {order_info.get('orderStatus')}. Aborting wait.")
                 return None
-            
+
             await asyncio.sleep(poll_interval)
-        
+
         self.logger.warning(f"Order {order_id} for {symbol} timed out after {timeout} seconds without filling.")
         return None
 
@@ -787,15 +745,36 @@ class BybitFuturesClient:
                 return None
         return None
 
+    async def _prune_expired_cache(self):
+        """Removes expired entries from the kline cache."""
+        now = datetime.now(timezone.utc)
+        expiration_days = self.config.risk_management.signal_expiration_days
+        expired_symbols = [
+            symbol for symbol, timestamp in self.cache_timestamps.items()
+            if (now - timestamp).days > expiration_days
+        ]
+        for symbol in expired_symbols:
+            del self.kline_cache[symbol]
+            del self.cache_timestamps[symbol]
+            self.logger.info(f"Pruned expired kline cache for {symbol}.")
+
     async def get_and_calculate_indicators(self, symbol: str, interval: str, limit: int = 200) -> Optional[pd.DataFrame]:
         """
         Fetches kline data and calculates all necessary technical indicators.
         """
-        df = await self.get_kline(symbol, interval, limit)
-        if df is None or df.empty:
-            self.logger.warning(f"Could not retrieve kline data for {symbol} with interval {interval}. Cannot calculate indicators.")
-            return None
- 
+        await self._prune_expired_cache()
+        # Check if kline data is in cache
+        if symbol not in self.kline_cache:
+            df = await self.get_kline(symbol, interval, limit)
+            if df is None or df.empty:
+                self.logger.warning(f"Could not retrieve kline data for {symbol} with interval {interval}. Cannot calculate indicators.")
+                return None
+            self.kline_cache[symbol] = df
+            self.cache_timestamps[symbol] = datetime.now(timezone.utc)
+            await self.subscribe_to_kline(symbol, interval)
+        else:
+            df = self.kline_cache[symbol]
+
         # Calculate Indicators
         # EMA 50
         df[f'EMA_{self.config.indicators.ema_50}'] = self.indicators_calculator.calculate_ema(df, self.config.indicators.ema_50)
@@ -811,10 +790,10 @@ class BybitFuturesClient:
         # Bollinger Bands
         bb_data = self.indicators_calculator.calculate_bollinger_bands(df, self.config.indicators.bollinger_bands_length, self.config.indicators.bollinger_bands_std)
         df = df.join(bb_data)
- 
+
         self.logger.info(f"Calculated indicators for {symbol} on {interval} timeframe.")
         return df
- 
+
     async def get_server_time(self, max_retries=3):
         """Retrieves Bybit server time (UTC) as a Unix timestamp (seconds)."""
         for attempt in range(max_retries):
@@ -822,12 +801,12 @@ class BybitFuturesClient:
                 session = self._create_session()
                 response = session.get_server_time()
                 self.logger.debug(f"Response from get_server_time: {response}")
- 
+
                 if response and response.get("retCode") == 0:
                     server_time_ms_str = response.get("result", {}).get("timeNano")
                     if not server_time_ms_str:
                           server_time_ms_str = response.get("result", {}).get("timeMilli")
- 
+
                     if server_time_ms_str:
                         server_time_sec = int(server_time_ms_str) / 1_000_000_000 if "timeNano" in response.get("result", {}) else int(server_time_ms_str) / 1000
                         self.logger.info(f"Bybit Server Time: {datetime.fromtimestamp(server_time_sec, tz=timezone.utc)}")
@@ -839,10 +818,10 @@ class BybitFuturesClient:
                     ret_code = response.get("retCode", "N/A")
                     ret_msg = response.get("retMsg", "Unknown error")
                     self.logger.error(f"Attempt {attempt + 1}: API error getting server time: {ret_msg} (Code: {ret_code})")
-                     
+
             except Exception as e:
                 self.logger.error(f"Attempt {attempt + 1}: Exception getting server time: {e}")
- 
+
             if attempt < max_retries - 1:
                 wait_time = (2 ** attempt) + random.uniform(0, 1)
                 self.logger.info(f"Retrying get_server_time in {wait_time:.2f} seconds...")
@@ -851,7 +830,7 @@ class BybitFuturesClient:
                 self.logger.error("Max retries reached for get_server_time. Returning None.")
                 return None
         return None
- 
+
     async def get_max_leverage(self, symbol, max_retries=3):
         """Retrieves the maximum leverage for a futures symbol."""
         try:
@@ -870,7 +849,7 @@ class BybitFuturesClient:
         except Exception as e:
             self.logger.error(f"Error getting max leverage for {symbol}: {e}. Using 25 as default.")
             return 25.0
- 
+
     async def set_position_mode(self, symbol, mode="MergedSingle", max_retries=3):
         """Sets the position mode (MergedSingle or BothSides) for a symbol."""
         # MergedSingle: one-way mode (long and short positions are merged)
@@ -885,7 +864,7 @@ class BybitFuturesClient:
                     mode=mode
                 )
                 self.logger.debug(f"Response from set_position_mode: {response}")
- 
+
                 if response and response.get("retCode") == 0:
                     self.logger.info(f"Position mode successfully set to {mode} for {symbol}")
                     return True
@@ -893,10 +872,10 @@ class BybitFuturesClient:
                     ret_code = response.get("retCode", "N/A")
                     ret_msg = response.get("retMsg", "Unknown error")
                     self.logger.error(f"Attempt {attempt + 1}: Failed to set position mode for {symbol}: {ret_msg} (Code: {ret_code})")
- 
+
             except Exception as e:
                 self.logger.error(f"Attempt {attempt + 1}: Exception setting position mode for {symbol}: {e}")
- 
+
             if attempt < max_retries - 1:
                 wait_time = (2 ** attempt) + random.uniform(0, 1)
                 self.logger.info(f"Retrying set_position_mode in {wait_time:.2f} seconds...")
@@ -905,14 +884,14 @@ class BybitFuturesClient:
                 self.logger.error(f"Max retries reached for set_position_mode({symbol}, {mode}). Failed.")
                 return False
         return False
- 
+
     async def set_trading_stop(self, symbol: str, tp_price: Optional[float] = None, sl_price: Optional[float] = None, max_retries=3):
         """
         Sets or amends the Take Profit and/or Stop Loss for an existing position.
         This function assumes an existing open position for the symbol.
         """
         category = "linear"
- 
+
         for attempt in range(max_retries):
             try:
                 session = self._create_session()
@@ -925,15 +904,15 @@ class BybitFuturesClient:
                     params["takeProfit"] = str(tp_price)
                 if sl_price is not None:
                     params["stopLoss"] = str(sl_price)
- 
+
                 if not tp_price and not sl_price:
                     self.logger.warning(f"No TP or SL price provided for {symbol}. No changes made.")
                     return True
- 
+
                 self.logger.info(f"Attempt {attempt + 1}: Setting trading stop for {symbol} with TP: {tp_price}, SL: {sl_price}")
                 response = session.set_trading_stop(**params)
                 self.logger.debug(f"Response from set_trading_stop: {response}")
- 
+
                 if response and response.get("retCode") == 0:
                     self.logger.info(f"Trading stop successfully set/amended for {symbol}. TP: {tp_price}, SL: {sl_price}")
                     return True
@@ -945,10 +924,10 @@ class BybitFuturesClient:
                         return True
                     else:
                         self.logger.error(f"Attempt {attempt + 1}: Failed to set trading stop for {symbol}: {ret_msg} (Code: {ret_code})")
- 
+
             except Exception as e:
                 self.logger.error(f"Attempt {attempt + 1}: Exception setting trading stop for {symbol}: {e}")
- 
+
             if attempt < max_retries - 1:
                 wait_time = (2 ** attempt) + random.uniform(0, 1)
                 self.logger.info(f"Retrying set_trading_stop in {wait_time:.2f} seconds...")
@@ -957,7 +936,7 @@ class BybitFuturesClient:
                 self.logger.error(f"Max retries reached for set_trading_stop({symbol}). Failed.")
                 return False
         return False
- 
+
     async def verify_stop_loss(self, symbol: str, expected_sl_price: float, max_retries: int = 5, retry_delay: int = 5) -> bool:
         """
         Verifies that the exchange-side stop loss for a position is correctly set.
@@ -977,12 +956,12 @@ class BybitFuturesClient:
                     self.logger.warning(f"Position or stopLoss not found for {symbol}. Retrying verification...")
             except Exception as e:
                 self.logger.error(f"Error during SL verification for {symbol} (attempt {attempt + 1}): {e}")
-            
+
             await asyncio.sleep(retry_delay)
-        
+
         self.logger.critical(f"CRITICAL: Stop Loss verification failed for {symbol} after {max_retries} attempts. Expected SL: {expected_sl_price}. Manual check required!")
         return False
- 
+
     async def get_usdt_balance(self) -> float:
         """Get the current USDT balance of the wallet."""
         balance = await self.client.get_account_balance(asset="USDT")
@@ -993,7 +972,7 @@ class BybitFuturesClient:
 
 class BybitHandler:
     """Handles Bybit futures trading operations."""
- 
+
     def __init__(self, config: Config):
         self.config = config
         self.logger = logging.getLogger(__name__)
@@ -1013,10 +992,10 @@ class BybitHandler:
                 get_active_symbols_callback=get_active_symbols_callback
             )
             await self.client._ensure_ws_connected()
- 
+
             # Removed asyncio.create_task(self.client._run_websocket_watchdog())
             # self.logger.info("WebSocket watchdog started.")
- 
+
             server_time = await self.client.get_server_time()
             if server_time:
                 local_time = datetime.now(timezone.utc).timestamp()
@@ -1025,23 +1004,23 @@ class BybitHandler:
                     self.logger.warning(f"Time difference between local and Bybit server is {time_diff:.2f} seconds. This might cause API issues.")
             else:
                 self.logger.warning("Could not retrieve Bybit server time. Time synchronization might be an issue.")
- 
+
             balance = await self.client.get_account_balance()
             if balance is None:
                 self.logger.error("Failed to connect to Bybit: Could not retrieve account balance.")
                 await self.client.stop_all_ws_listeners()
                 return False
-            
+
             self.logger.info(f"Successfully connected to Bybit. Account balance: {balance} USDT")
             self.is_connected = True
- 
+
             await self._recover_open_positions()
- 
+
             return True
         except Exception as e:
             self.logger.error(f"Failed to connect to Bybit: {e}")
             return False
- 
+
     async def place_trade(self, symbol: str, side: str, qty_str: str, entry_price: float, stop_loss: float, all_take_profits: Optional[list[float]] = None, atr: Optional[float] = None, is_to_the_moon: bool = False) -> Optional[str]:
         """
         Places a conditional trade on Bybit futures, waits for it to fill, and then sets an exchange-side stop loss.
@@ -1057,9 +1036,9 @@ class BybitHandler:
         if not self.is_connected:
             self.logger.error("BybitHandler not connected.")
             return None
-         
+
         self.logger.info(f"Preparing trade for {symbol}: Side={side}, Entry={entry_price}, Qty={qty_str}, SL={stop_loss}")
- 
+
         # Place conditional market order without SL/TP
         order_id = await self.client.place_order(
             symbol=symbol,
@@ -1068,28 +1047,28 @@ class BybitHandler:
             order_type="MARKET",
             trigger_price=entry_price
         )
- 
+
         if not order_id:
             self.logger.error(f"Failed to place entry order for {symbol}.")
             return None
-         
+
         self.logger.info(f"Entry order placed for {symbol}. Order ID: {order_id}")
- 
+
         # Poll for order status until filled
         filled_order_info = await self._wait_for_order_fill(symbol, order_id)
- 
+
         if not filled_order_info:
             self.logger.error(f"Entry order {order_id} for {symbol} did not fill. Aborting trade.")
             return None
- 
+
         filled_qty = float(filled_order_info.get("cumExecQty"))
         avg_fill_price = float(filled_order_info.get("avgPrice"))
         self.logger.info(f"Entry order {order_id} for {symbol} filled. Quantity: {filled_qty}, Avg Price: {avg_fill_price}")
- 
+
         # Set exchange-side Stop Loss
         self.logger.info(f"Attempting to set exchange-side Stop Loss for {symbol} at {stop_loss}...")
         sl_set_success = await self.client.set_trading_stop(symbol=symbol, sl_price=stop_loss)
- 
+
         if not sl_set_success:
             self.logger.critical(f"CRITICAL: Failed to set exchange-side Stop Loss for {symbol} at {stop_loss}. Manual intervention required!")
         else:
@@ -1099,11 +1078,11 @@ class BybitHandler:
                 self.logger.critical(f"CRITICAL: Stop Loss for {symbol} at {stop_loss} could not be verified on the exchange after setting. Manual intervention required!")
             else:
                 self.logger.info(f"SL for {symbol} verified on exchange at {stop_loss}.")
-         
+
         initial_usd_invested = filled_qty * avg_fill_price
         self.track_position(symbol, side, initial_usd_invested, avg_fill_price, stop_loss, all_take_profits[0] if all_take_profits else None, all_take_profits, atr, is_to_the_moon)
         return order_id
- 
+
     async def _recover_open_positions(self):
         """
         Fetches all open positions on startup and ensures a Stop Loss is set for each.
@@ -1120,16 +1099,16 @@ class BybitHandler:
                         current_sl = position.get("stopLoss")
                         if not current_sl or float(current_sl) == 0.0:
                             self.logger.warning(f"Found open position for {symbol} with no Stop Loss. Attempting to set a protective SL.")
-                             
+
                             tracked_position_data = self.tracked_positions.get(symbol)
                             protective_sl_price = None
- 
+
                             if tracked_position_data and tracked_position_data.get("stop_loss"):
                                 protective_sl_price = tracked_position_data["stop_loss"]
                                 self.logger.info(f"Found original SL {protective_sl_price} for {symbol} from tracked positions.")
                             else:
                                 self.logger.warning(f"No original SL found in tracked positions for {symbol}. Cannot automatically set protective SL.")
-                            
+
                             if protective_sl_price:
                                 self.logger.info(f"Setting protective SL for {symbol} at {protective_sl_price}...")
                                 sl_set_success = await self.client.set_trading_stop(symbol=symbol, sl_price=protective_sl_price)
@@ -1148,21 +1127,21 @@ class BybitHandler:
         except Exception as e:
             self.logger.error(f"Error during open positions recovery: {e}", exc_info=True)
         self.logger.info("Open positions recovery process completed.")
- 
+
     async def get_current_price(self, symbol: str) -> Optional[float]:
         """Gets the current market price for a given symbol."""
         if not self.is_connected:
             self.logger.error("BybitHandler not connected.")
             return None
         return await self.client.get_symbol_price(symbol)
- 
+
     async def disconnect(self):
         """Disconnects from Bybit."""
         if self.client:
             self.logger.info("Bybit client session closed.")
         self.logger.info("Bybit handler disconnected.")
         self.is_connected = False
- 
+
     def track_position(self, symbol: str, side: str, initial_usd_invested: float, entry_price: float, stop_loss: Optional[float], take_profit: Optional[float], all_take_profits: Optional[list[float]], atr: Optional[float], is_to_the_moon: bool = False):
         """
         Tracks a newly opened position for sell strategy (TP/SL).
@@ -1184,7 +1163,7 @@ class BybitHandler:
             "trailing_stop_distance": atr * self.config.risk_management.atr_trailing_stop_multiplier if atr else None
         }
         self.logger.info(f"Tracking new position for {symbol}: {side}, Invested {initial_usd_invested} USDT at {entry_price}, SL: {stop_loss}, TP: {take_profit}, ToTheMoon: {is_to_the_moon}")
- 
+
     async def monitor_and_execute_sells(self, symbol: str):
         """
         Monitors a single tracked position and executes sell/close orders based on predefined targets (TP/SL).
@@ -1192,19 +1171,19 @@ class BybitHandler:
         position = self.tracked_positions.get(symbol)
         if not position:
             return
- 
+
         try:
             current_price = await self.client.get_symbol_price(symbol)
             if current_price is None:
                 self.logger.warning(f"Could not get current price for {symbol}. Skipping sell monitoring.")
                 return
- 
+
             position_info = await self.client.get_position(symbol)
             if not position_info or float(position_info.get("size", 0)) == 0:
                 self.logger.info(f"Position for {symbol} is closed. Removing from tracking.")
                 del self.tracked_positions[symbol]
                 return
- 
+
             # Refresh position data from tracking
             entry_price = position["entry_price"]
             side = position["side"]
@@ -1214,15 +1193,15 @@ class BybitHandler:
             current_tp_index = position["current_tp_index"]
             is_to_the_moon = position["is_to_the_moon"]
             atr = position["atr"]
-            
+
             # Calculate PnL percentage (for logging/info)
             if side == "Buy":
                 pnl_percentage = (current_price - entry_price) / entry_price
             else:
                 pnl_percentage = (entry_price - current_price) / entry_price
-            
+
             self.logger.info(f"Monitoring {symbol}: Current Price={current_price:.4f}, PnL: {pnl_percentage:.2%}")
- 
+
             # --- Take Profit (TP) Logic ---
             if all_take_profits and current_tp_index < len(all_take_profits):
                 next_tp = all_take_profits[current_tp_index]
@@ -1231,11 +1210,11 @@ class BybitHandler:
                     tp_hit = True
                 elif side == "Sell" and current_price <= next_tp:
                     tp_hit = True
- 
+
                 if tp_hit:
                     self.logger.info(f"TP {current_tp_index + 1} hit for {symbol} at {next_tp:.4f}.")
                     position["current_tp_index"] += 1
- 
+
                     if position["current_tp_index"] == len(all_take_profits) and not is_to_the_moon:
                         self.logger.info(f"Final TP hit for {symbol}. Closing entire position.")
                         close_side = "Sell" if side == "Buy" else "Buy"
@@ -1260,11 +1239,11 @@ class BybitHandler:
                         new_sl = entry_price
                         if current_tp_index > 0:
                             new_sl = all_take_profits[current_tp_index - 1]
-                        
+
                         self.logger.info(f"Moving Stop Loss for {symbol} to {new_sl:.4f} (after hitting TP {current_tp_index}).")
                         position["stop_loss"] = new_sl
                         await self.client.set_trading_stop(symbol=symbol, sl_price=new_sl)
- 
+
             # --- Trailing Stop Logic (for "To the moon" only) ---
             if is_to_the_moon and position["trailing_stop_active"] and atr and position["trailing_stop_price"] is not None:
                 if side == "Buy":
@@ -1279,13 +1258,13 @@ class BybitHandler:
                         position["trailing_stop_price"] = new_trailing_stop_price
                         self.logger.info(f"Trailing stop updated for {symbol} (ToTheMoon Short). New trailing stop price: {position['trailing_stop_price']:.4f}")
                         await self.client.set_trading_stop(symbol=symbol, sl_price=new_trailing_stop_price)
-                 
+
                 if (side == "Buy" and current_price <= position["trailing_stop_price"]) or \
                    (side == "Sell" and current_price >= position["trailing_stop_price"]):
                     self.logger.info(f"TRADE CLOSED: Trailing stop hit for {symbol} (ToTheMoon {side}). Current Price: {current_price:.4f}, Trailing Stop: {position['trailing_stop_price']:.4f}")
                     del self.tracked_positions[symbol]
                     return
- 
+
             # --- Initial Stop Loss (SL) check (if trailing stop not active) ---
             if current_stop_loss is not None and not position["trailing_stop_active"]:
                 sl_hit = False
@@ -1293,12 +1272,12 @@ class BybitHandler:
                     sl_hit = True
                 elif side == "Sell" and current_price >= current_stop_loss:
                     sl_hit = True
- 
+
                 if sl_hit:
                     self.logger.info(f"TRADE CLOSED: Stop loss hit for {symbol} ({side}). Current Price: {current_price:.4f}, SL: {current_stop_loss:.4f}")
                     del self.tracked_positions[symbol]
                     return
- 
+
         except Exception as e:
             self.logger.error(f"Error monitoring {symbol}: {e}")
             self.logger.debug(traceback.format_exc())
