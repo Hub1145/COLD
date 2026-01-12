@@ -31,6 +31,15 @@ class BybitFuturesClient:
         self.logger = logging.getLogger(__name__)
         self.indicators_calculator = TechnicalIndicators(self.logger)
         self.get_active_symbols_callback = get_active_symbols_callback
+        self.last_ws_message_time: Optional[datetime] = None
+
+    def get_interval_map(self):
+        """Returns the interval mapping."""
+        return {
+            '1m': '1', '3m': '3', '5m': '5', '15m': '15', '30m': '30',
+            '1h': '60', '2h': '120', '4h': '240', '6h': '360', '12h': '720',
+            '1d': 'D', '1w': 'W', '1M': 'M'
+        }
 
     def _create_session(self):
         """Creates a new pybit session for futures trading."""
@@ -52,6 +61,7 @@ class BybitFuturesClient:
 
     def _ws_message_handler(self, message):
         """Handles incoming WebSocket messages."""
+        self.last_ws_message_time = datetime.now(timezone.utc)
         self.logger.debug(f"WS: Raw message received: {message}")
         try:
             if 'topic' in message and message['topic'].startswith('kline.'):
@@ -94,6 +104,32 @@ class BybitFuturesClient:
                 self.logger.debug(f"WS: Unhandled message: {message}")
         except Exception as e:
             self.logger.error(f"Error in WebSocket message handler: {e}", exc_info=True)
+
+    async def _run_websocket_watchdog(self):
+        """Monitors the WebSocket connection and reconnects if necessary."""
+        while self.ws_connected:
+            if self.last_ws_message_time:
+                time_since_last_message = (datetime.now(timezone.utc) - self.last_ws_message_time).total_seconds()
+                if time_since_last_message > self.config.websocket.websocket_watchdog_seconds:
+                    self.logger.warning(f"No WebSocket message received for {time_since_last_message} seconds. Reconnecting.")
+                    await self._reconnect_websocket()
+            await asyncio.sleep(self.config.websocket.heartbeat_seconds)
+
+    async def _reconnect_websocket(self):
+        """Handles the WebSocket reconnection logic."""
+        self.ws_connected = False
+        if self.ws:
+            self.ws.exit()
+
+        self.logger.info("Attempting to reconnect to WebSocket...")
+        await self._ensure_ws_connected()
+
+        # Resubscribe to all previously subscribed topics
+        if self.get_active_symbols_callback:
+            active_symbols = self.get_active_symbols_callback()
+            self.logger.info(f"Resubscribing to kline data for active symbols: {active_symbols}")
+            for symbol in active_symbols:
+                await self.subscribe_to_kline(symbol, self.config.trading.timeframe)
 
     async def subscribe_to_kline(self, symbol: str, interval: str):
         """Subscribes to kline data for a single symbol."""
@@ -998,8 +1034,8 @@ class BybitHandler:
             )
             await self.client._ensure_ws_connected()
 
-            # Removed asyncio.create_task(self.client._run_websocket_watchdog())
-            # self.logger.info("WebSocket watchdog started.")
+            asyncio.create_task(self.client._run_websocket_watchdog())
+            self.logger.info("WebSocket watchdog started.")
 
             server_time = await self.client.get_server_time()
             if server_time:

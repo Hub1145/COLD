@@ -323,7 +323,7 @@ class SignalExecutor:
 
                 if not signal_valid:
                     self.logger.info(f"Signal conditions not met for {symbol} ({side}). Waiting for conditions to align.")
-                    await asyncio.sleep(self.config.risk_management.per_pair_cooldown_minutes * 60) # Wait for a full interval before re-checking
+                    await asyncio.sleep(5) # Wait for 5 seconds before re-checking
                     continue # Continue monitoring
                 
                 # Check entry price condition within tolerance
