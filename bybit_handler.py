@@ -25,7 +25,6 @@ class BybitFuturesClient:
         self.ws: Optional[WebSocket] = None
         self.ws_connected = False
         self.instrument_info_cache = {}
-        self.realtime_prices: Dict[str, float] = {}
         self.kline_cache: Dict[str, pd.DataFrame] = {}
         self.cache_timestamps: Dict[str, datetime] = {}
         self.current_forming_klines: Dict[str, pd.DataFrame] = {}

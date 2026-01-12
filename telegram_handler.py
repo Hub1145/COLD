@@ -294,27 +294,11 @@ class SignalExecutor:
                     df = cached_df
                     self.logger.debug(f"Using cached kline data for {symbol}.")
                 
-                # Get the latest WebSocket price
-                current_market_price = self.bybit_handler.client.realtime_prices.get(symbol)
-                if current_market_price is None:
-                    # Fallback to last kline close price if WS not available, but log a warning
-                    current_market_price = df.iloc[-1]["Close"]
-                    self.logger.warning(f"WebSocket price not available for {symbol}. Using kline close price: {current_market_price}")
-
-
-                # Create a temporary DataFrame for indicator calculation with the latest price
-                # This prevents modifying the historical kline data directly
-                temp_df = df.copy()
-                # Update the last candle's close price with the real-time price
-                temp_df.loc[temp_df.index[-1], 'Close'] = current_market_price
-                # Ensure High/Low also reflect the current price if it's an extreme
-                temp_df.loc[temp_df.index[-1], 'High'] = max(temp_df.loc[temp_df.index[-1], 'High'], current_market_price)
-                temp_df.loc[temp_df.index[-1], 'Low'] = min(temp_df.loc[temp_df.index[-1], 'Low'], current_market_price)
-
+                current_market_price = df.iloc[-1]['Close']
 
                 # Calculate indicators on the temporary DataFrame
                 df_with_indicators = self.bybit_handler.client.indicators_calculator.calculate_all_indicators(
-                    temp_df,
+                    df,
                     self.config.indicators
                 )
 
