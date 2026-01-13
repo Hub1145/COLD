@@ -271,8 +271,9 @@ class SignalExecutor:
                 )
 
                 if df_with_indicators is None or df_with_indicators.empty:
-                    self.logger.warning(f"Could not retrieve or calculate indicators for {symbol}. Waiting for next cycle.")
-                    await asyncio.sleep(5)
+                    timeframe_minutes = int(re.search(r'\d+', self.config.trading.timeframe).group())
+                    self.logger.info(f"No kline data available for {symbol}. Waiting for {timeframe_minutes} minutes before retrying.")
+                    await asyncio.sleep(timeframe_minutes * 60)
                     continue
 
                 latest_kline_with_indicators = df_with_indicators.iloc[-1]

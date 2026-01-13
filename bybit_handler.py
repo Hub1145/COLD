@@ -767,7 +767,7 @@ class BybitFuturesClient:
                         self.logger.info(f"Successfully retrieved {len(df)} klines for {symbol} interval {bybit_interval}")
                         return df
                     else:
-                        self.logger.warning(f"Empty kline list returned for {symbol} interval {bybit_interval}.")
+                        # Return an empty DataFrame without a warning for symbols that may not have kline data yet
                         return pd.DataFrame()
                 else:
                     ret_code = response.get("retCode", "N/A")
