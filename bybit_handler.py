@@ -87,8 +87,8 @@ class BybitFuturesClient:
 
                         # Check if the timestamp exists in the cache
                         if not kline_df.index.isin(cached_df.index).any():
-                            # New candle, append and drop the oldest
-                            self.kline_cache[symbol] = pd.concat([cached_df, kline_df]).iloc[1:]
+                            # New candle, append it
+                            self.kline_cache[symbol] = pd.concat([cached_df, kline_df])
                         else:
                             # Update existing candle
                             cached_df.update(kline_df)
@@ -799,7 +799,7 @@ class BybitFuturesClient:
             del self.cache_timestamps[symbol]
             self.logger.info(f"Pruned expired kline cache for {symbol}.")
 
-    async def get_and_calculate_indicators(self, symbol: str, interval: str, limit: int = 200) -> Optional[pd.DataFrame]:
+    async def get_and_calculate_indicators(self, symbol: str, interval: str, limit: int = 700) -> Optional[pd.DataFrame]:
         """
         Fetches kline data and calculates all necessary technical indicators.
         """
