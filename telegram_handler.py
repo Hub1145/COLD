@@ -255,9 +255,6 @@ class SignalExecutor:
         entry conditions and signal logic are met.
         """
         self.logger.info(f"Starting real-time price monitoring for {symbol} (Signal ID: {signal_id})")
-        
-        last_kline_fetch_time = None
-        cached_df = None
 
         try:
             while signal_id in self.pending_signals and not self.pending_signals[signal_id].get('executed'):
@@ -267,47 +264,19 @@ class SignalExecutor:
                     self.logger.warning(f"Signal for {symbol} (ID: {signal_id}) expired after {self.config.risk_management.signal_expiration_days} days. Stopping monitoring.")
                     break # Break the loop and cleanup
 
-                # Determine if we need to fetch new kline data
-                fetch_new_kline = False
-                if cached_df is None or last_kline_fetch_time is None:
-                    fetch_new_kline = True
-                else:
-                    time_since_last_fetch = (datetime.now() - last_kline_fetch_time).total_seconds()
-                    if time_since_last_fetch >= self.config.trading.kline_refresh_interval_seconds:
-                        fetch_new_kline = True
-
-                if fetch_new_kline:
-                    df = await self.bybit_handler.client.get_kline(
-                        symbol,
-                        self.config.trading.timeframe
-                    )
-
-                    if df is None or df.empty:
-                        self.logger.debug(f"No kline data for {symbol}. Waiting for next refresh cycle.")
-                        await asyncio.sleep(self.config.trading.kline_refresh_interval_seconds)
-                        continue
-                    
-                    cached_df = df
-                    last_kline_fetch_time = datetime.now()
-                    self.logger.debug(f"Fetched new kline data for {symbol}.")
-                else:
-                    df = cached_df
-                    self.logger.debug(f"Using cached kline data for {symbol}.")
-                
-                current_market_price = df.iloc[-1]['Close']
-
-                # Calculate indicators on the temporary DataFrame
-                df_with_indicators = self.bybit_handler.client.indicators_calculator.calculate_all_indicators(
-                    df,
-                    self.config.indicators
+                # Get kline data (this will use the cache) and calculate indicators
+                df_with_indicators = await self.bybit_handler.client.get_and_calculate_indicators(
+                    symbol,
+                    self.config.trading.timeframe
                 )
 
                 if df_with_indicators is None or df_with_indicators.empty:
-                    self.logger.warning(f"Could not calculate indicators for {symbol} with live price. Waiting for next refresh cycle.")
-                    await asyncio.sleep(self.config.trading.kline_refresh_interval_seconds)
+                    self.logger.warning(f"Could not retrieve or calculate indicators for {symbol}. Waiting for next cycle.")
+                    await asyncio.sleep(5)
                     continue
 
                 latest_kline_with_indicators = df_with_indicators.iloc[-1]
+                current_market_price = latest_kline_with_indicators['Close']
 
                 self.logger.debug(
                     f"Indicators for {symbol} | Price: {current_market_price:.4f} | "
