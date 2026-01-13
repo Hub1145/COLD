@@ -538,10 +538,6 @@ class SignalExecutor:
         side = "Buy" if signal['direction'] == "LONG" else "Sell"
         parsed_at_datetime = signal['parsed_at_datetime']
 
-        # Ensure WebSocket is subscribed for this symbol
-        await self.bybit_handler.client.subscribe_to_kline(symbol, self.config.trading.timeframe)
-        await asyncio.sleep(2) # Small delay for WS to connect and send data
-
         monitoring_task = asyncio.create_task(
             self._monitor_entry_price(signal_id, symbol, side, entry_price, parsed_at_datetime)
         )
