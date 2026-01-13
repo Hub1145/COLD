@@ -26,7 +26,7 @@ class TechnicalIndicators:
             return pd.Series(dtype='float64')
         try:
             ema = ta.trend.ema_indicator(df["Close"], window=length)
-            self.logger.info(f"{indicator_name} calculated.")
+            self.logger.debug(f"{indicator_name} calculated.")
             return ema.bfill() # Fill NaN values
         except Exception as e:
             self.logger.error(f"Error calculating {indicator_name}: {e}")
@@ -42,7 +42,7 @@ class TechnicalIndicators:
             return pd.Series(dtype='float64')
         try:
             rsi = ta.momentum.rsi(df["Close"], window=length)
-            self.logger.info(f"{indicator_name} calculated.")
+            self.logger.debug(f"{indicator_name} calculated.")
             return rsi.bfill() # Fill NaN values
         except Exception as e:
             self.logger.error(f"Error calculating {indicator_name}: {e}")
@@ -66,7 +66,7 @@ class TechnicalIndicators:
                 'MACD_Signal': macd_signal,
                 'MACD_Hist': macd_hist
             })
-            self.logger.info(f"{indicator_name} calculated.")
+            self.logger.debug(f"{indicator_name} calculated.")
             return macd_df.bfill() # Fill NaN values
         except Exception as e:
             self.logger.error(f"Error calculating {indicator_name}: {e}")
@@ -101,7 +101,7 @@ class TechnicalIndicators:
             return pd.Series(dtype='float64')
         try:
             atr = ta.volatility.average_true_range(df["High"], df["Low"], df["Close"], window=length)
-            self.logger.info(f"{indicator_name} calculated.")
+            self.logger.debug(f"{indicator_name} calculated.")
             return atr.bfill() # Fill NaN values
         except Exception as e:
             self.logger.error(f"Error calculating {indicator_name}: {e}")
@@ -122,7 +122,7 @@ class TechnicalIndicators:
                 'BB_Mid': bollinger.bollinger_mavg(),
                 'BB_Upper': bollinger.bollinger_hband()
             })
-            self.logger.info(f"{indicator_name} calculated.")
+            self.logger.debug(f"{indicator_name} calculated.")
             return bb_df.bfill() # Fill NaN values
         except Exception as e:
             self.logger.error(f"Error calculating {indicator_name}: {e}")

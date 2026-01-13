@@ -322,7 +322,7 @@ class SignalExecutor:
                 signal_valid, confirmation_count = self._evaluate_signal_conditions(symbol, latest_kline_with_indicators, current_market_price, side)
 
                 if not signal_valid:
-                    self.logger.info(f"Signal conditions not met for {symbol} ({side}). Waiting for conditions to align.")
+                    self.logger.debug(f"Signal conditions not met for {symbol} ({side}). Waiting for conditions to align.")
                     await asyncio.sleep(5) # Wait for 5 seconds before re-checking
                     continue # Continue monitoring
                 
