@@ -309,7 +309,7 @@ class SignalExecutor:
 
                 latest_kline_with_indicators = df_with_indicators.iloc[-1]
 
-                self.logger.info(
+                self.logger.debug(
                     f"Indicators for {symbol} | Price: {current_market_price:.4f} | "
                     f"EMA_50: {latest_kline_with_indicators[f'EMA_{self.config.indicators.ema_50}']:.4f} | "
                     f"EMA_200: {latest_kline_with_indicators[f'EMA_{self.config.indicators.ema_200}']:.4f} | "

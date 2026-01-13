@@ -1321,4 +1321,3 @@ class BybitHandler:
 
         except Exception as e:
             self.logger.error(f"Error monitoring {symbol}: {e}")
-            self.logger.debug(traceback.format_exc())
